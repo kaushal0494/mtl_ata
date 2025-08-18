@@ -2,22 +2,26 @@
 # ============================================================
 # LoRA Fine-Tuning / Evaluation / Prediction Runner
 # ============================================================
+
+export CUDA_VISIBLE_DEVICES=0
+
 MODEL_NAME="google/gemma-2-2b-it" #"meta-llama/Llama-3.1-8B-Instruct" #"google/gemma-3-1b-it"
 MODEL_PATH="./outputs/MI_lora_model"
-TRAIN_CSV="/home/kaushal.maurya/tutor_eval_auto_metrics/data_preprocessing/output/MI_train.csv"
-EVAL_CSV="/home/kaushal.maurya/tutor_eval_auto_metrics/data_preprocessing/output/MI_dev.csv"
-PREDICT_CSV="/home/kaushal.maurya/tutor_eval_auto_metrics/data_preprocessing/output/MI_test.csv"
-OUTPUT_DIR="./outputs_llama_exp03"
-MAX_LENGTH=1024
+TRAIN_CSV="/home/kaushal.maurya/tutor_eval_auto_metrics/data_preprocessing/output/MTL_train.csv"
+EVAL_CSV="/home/kaushal.maurya/tutor_eval_auto_metrics/data_preprocessing/output/MTL_dev.csv"
+PREDICT_CSV="/home/kaushal.maurya/tutor_eval_auto_metrics/data_preprocessing/output/MTL_test.csv"
+OUTPUT_DIR="./exp_mtl_07"
+MAX_LENGTH=2048
 BATCH_SIZE=4
 GRAD_ACCUM=1
 EPOCHS=3
 LEARNING_RATE=5e-4
-WARMUP_STEPS=100
 WEIGHT_DECAY=0.01
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="run_${TIMESTAMP}.log"
+
+mkdir -p "$OUTPUT_DIR"  # Add this line
 
 MODE=$1  # train / eval / predict
 
@@ -33,9 +37,8 @@ if [ "$MODE" = "train" ]; then
         --gradient_accumulation_steps $GRAD_ACCUM \
         --epochs $EPOCHS \
         --learning_rate $LEARNING_RATE \
-        --warmup_steps $WARMUP_STEPS \
         --weight_decay $WEIGHT_DECAY \
-        2>&1 | tee "$OUTPUT_DIR/$LOG_FILE"
+        2>&1 | tee "$OUTPUT_DIR/$LOG_FILE" 
 
 elif [ "$MODE" = "eval" ]; then
     python tutor_response_assessment.py \

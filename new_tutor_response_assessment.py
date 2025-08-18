@@ -1,13 +1,19 @@
-import argparse
 import os
+import argparse
 import logging
 import torch
 import pandas as pd
+import numpy as np
 from datasets import Dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
+from transformers import AutoTokenizer, AutoModelForCausalLM, set_seed, TrainingArguments
 from peft import LoraConfig, get_peft_model
 from trl import SFTTrainer
 from colorama import Fore, init as colorama_init
+from sklearn.utils.class_weight import compute_class_weight
+
+set_seed(42)
+
+LABEL_LIST = ["Yes", "No", "To some extent"]
 
 # Initialize colorama for colored console output
 colorama_init(autoreset=True)
@@ -50,66 +56,161 @@ class DataLoader:
         logger.info(Fore.GREEN + f"{name} CSV loaded successfully with {len(df)} rows.")
         return df
 
+# Single task dataformattor 
+# class DatasetFormatter:
+#     """Handles formatting datasets for model training, ready for LLaMA / LoRA fine-tuning"""
+
+#     SYSTEM_PROMPT = (
+#         "As an expert evaluator of AI tutors, assess the pedagogical appropriateness of the tutor's response. "
+#         "You will receive:\n"
+#         "1. ### Conversation History showing student mistakes/confusion\n"
+#         "2. ### Tutor Response attempting to address these issues\n\n"
+#         # "Classification Criteria:\n"
+#         # "- 'Yes': Fully addresses confusion with effective teaching strategies\n"
+#         # "- 'No': Fails to address or exacerbates misunderstandings\n"
+#         # "- 'To some extent': Partially effective but with notable deficiencies\n\n"
+#         "Output exactly one label without additional text: Yes, No, or To some extent"
+#     )
+
+    # @classmethod
+    # def create_dataset(cls, batch: dict, tokenizer: AutoTokenizer, max_length: int = 512) -> dict:
+    #     """
+    #     Formats a batch of examples into chat-style prompts and tokenizes them for LLaMA / causal LM training.
+        
+    #     Args:
+    #         batch: Dictionary containing 'conversation', 'response', 'label' lists
+    #         tokenizer: Hugging Face tokenizer
+    #         max_length: Maximum sequence length for padding/truncation
+        
+    #     Returns:
+    #         Dictionary with 'input_ids', 'attention_mask', 'labels' ready for training
+    #     """
+    #     logger.debug(f"Formatting {len(batch['conversation'])} samples.")
+    #     texts = []
+        
+    #     for conv, resp, label in zip(batch["conversation"], batch["response"], batch["annotation"]):
+    #         # Combine into chat prompt
+    #         # messages = [
+    #         #     {"role": "system", "content": cls.SYSTEM_PROMPT},
+    #         #     {"role": "user", "content": f"### Conversation History:\n{conv.strip()}\n\n### Tutor Response:\n{resp.strip()}\n\n"},
+    #         #     {"role": "assistant", "content": f"### Expected Label is:\n{label}"}
+    #         # ]
+
+    #         messages = [
+    #             {
+    #                 "role": "user", 
+    #                 "content": (
+    #                     f"{cls.SYSTEM_PROMPT}\n\n"
+    #                     f"### Conversation History:\n{conv.strip()}\n\n"
+    #                     f"### Tutor Response:\n{resp.strip()}\n\n"
+    #                     f"Now provide the classification label."
+    #                 )
+    #             },
+    #             {
+    #                 "role": "assistant", 
+    #                 "content": label
+    #             },
+    #         ]
+            
+    #         # Flatten messages into single string
+    #         text = tokenizer.apply_chat_template(messages, tokenize=False)
+    #         texts.append(text)
+        
+    #     # Tokenize the batch
+    #     tokenized = tokenizer(
+    #         texts,
+    #         padding="max_length",
+    #         truncation=True,
+    #         max_length=max_length,
+    #         return_tensors="pt"
+    #     )
+        
+    #     # # Add labels for classification / evaluation
+    #     tokenized["labels"] = tokenized["input_ids"]
+    #     return tokenized
+
+# Multi task data formatter
 class DatasetFormatter:
     """Handles formatting datasets for model training, ready for LLaMA / LoRA fine-tuning"""
 
     SYSTEM_PROMPT = (
-        "As an expert evaluator of AI tutors, assess the pedagogical appropriateness of the tutor's response. "
-        "You will receive:\n"
-        "1. ### Conversation History showing student mistakes/confusion\n"
-        "2. ### Tutor Response attempting to address these issues\n\n"
-        # "Classification Criteria:\n"
-        # "- 'Yes': Fully addresses confusion with effective teaching strategies\n"
-        # "- 'No': Fails to address or exacerbates misunderstandings\n"
-        # "- 'To some extent': Partially effective but with notable deficiencies\n\n"
+        "You are an expert evaluator of AI tutors. "
+        "For the given ### Task, ### Task Definition, ### Label Definition, ### Conversation History and ### Tutor Response, assess the pedagogical appropriateness of the Tutor Response. "
         "Output exactly one label without additional text: Yes, No, or To some extent"
     )
 
+    # Task definitions
+    TASK_DEFINITIONS = {
+        "mistake_identification": "Has the tutor identified/recognized a mistake in a student’s response?",
+        "mistake_location": "Does the tutor’s response accurately point to a genuine mistake and its location?",
+        "providing_guidance": "Does the tutor offer correct and relevant guidance, such as an explanation, elaboration, hint, examples, and so on?",
+        "actionability": "Is it clear from the tutor’s feedback what the student should do next?"
+    }
+
+    # Optional label definitions per task
+    LABEL_DEFINITIONS = {
+        "mistake_identification": {
+            "Yes": "The tutor correctly identified the mistake in the student’s response.",
+            "To some extent": "The tutor partially recognized the mistake but did not fully capture it.",
+            "No": "The tutor failed to identify any mistake."
+        },
+        "mistake_location": {
+            "Yes": "The tutor accurately points to the exact mistake and its location.",
+            "To some extent": "The tutor points to a mistake but imprecisely or partially.",
+            "No": "The tutor fails to indicate the mistake or its location."
+        },
+        "providing_guidance": {
+            "Yes": "The tutor provides correct and relevant guidance, hints, examples, or explanation.",
+            "To some extent": "The guidance is partially correct or not fully helpful.",
+            "No": "The tutor fails to provide relevant guidance."
+        },
+        "actionability": {
+            "Yes": "It is clear what the student should do next.",
+            "To some extent": "The next steps are somewhat unclear or incomplete.",
+            "No": "The feedback does not indicate any actionable steps."
+        }
+    }
+
     @classmethod
-    def create_dataset(cls, batch: dict, tokenizer: AutoTokenizer, max_length: int = 512) -> dict:
-        """
-        Formats a batch of examples into chat-style prompts and tokenizes them for LLaMA / causal LM training.
-        
-        Args:
-            batch: Dictionary containing 'conversation', 'response', 'label' lists
-            tokenizer: Hugging Face tokenizer
-            max_length: Maximum sequence length for padding/truncation
-        
-        Returns:
-            Dictionary with 'input_ids', 'attention_mask', 'labels' ready for training
-        """
+    def create_dataset(cls, batch: dict, tokenizer: AutoTokenizer, max_length: int = 512, include_label_definitions: bool = False) -> dict:
         logger.debug(f"Formatting {len(batch['conversation'])} samples.")
         texts = []
         
-        for conv, resp, label in zip(batch["conversation"], batch["response"], batch["annotation"]):
-            # Combine into chat prompt
-            # messages = [
-            #     {"role": "system", "content": cls.SYSTEM_PROMPT},
-            #     {"role": "user", "content": f"### Conversation History:\n{conv.strip()}\n\n### Tutor Response:\n{resp.strip()}\n\n"},
-            #     {"role": "assistant", "content": f"### Expected Label is:\n{label}"}
-            # ]
+        for conv, resp, label, task in zip(
+            batch["conversation"],
+            batch["response"],
+            batch["annotation"],
+            batch["task"]
+        ):
+            task_def = cls.TASK_DEFINITIONS.get(task.lower(), "No definition available for this task.")
+
+            # Prepare label definitions string if needed
+            label_def_str = ""
+            # if include_label_definitions:
+            label_defs = cls.LABEL_DEFINITIONS.get(task.lower(), {})
+            if label_defs:
+                label_lines = [f"- {k}: {v}" for k, v in label_defs.items()]
+                label_def_str = "\n".join(label_lines) + "\n\n"
 
             messages = [
                 {
-                    "role": "user", 
+                    "role": "user",
                     "content": (
                         f"{cls.SYSTEM_PROMPT}\n\n"
+                        f"### Task: {task}\n"
+                        f"### Task Definition: {task_def}\n\n"
+                        # f"### Label Definition: \n{label_def_str}"
                         f"### Conversation History:\n{conv.strip()}\n\n"
-                        f"### Tutor Response:\n{resp.strip()}\n\n"
+                        f"### Tutor Response:{resp.strip()}\n\n"
                         f"Now provide the classification label."
-                    )
+                    ),
                 },
-                {
-                    "role": "assistant", 
-                    "content": label
-                },
+                {"role": "assistant", "content": label},
             ]
-            
-            # Flatten messages into single string
+
             text = tokenizer.apply_chat_template(messages, tokenize=False)
             texts.append(text)
-        
-        # Tokenize the batch
+
         tokenized = tokenizer(
             texts,
             padding="max_length",
@@ -117,11 +218,71 @@ class DatasetFormatter:
             max_length=max_length,
             return_tensors="pt"
         )
-        
-        # # Add labels for classification / evaluation
         tokenized["labels"] = tokenized["input_ids"]
         return tokenized
 
+# class for Focal loss
+# class FocalLoss(torch.nn.Module):
+#     """Focal Loss for multi-class classification"""
+#     def __init__(self, gamma=2.0, weight=None, reduction="mean"):
+#         super().__init__()
+#         self.gamma = gamma
+#         self.weight = weight
+#         self.reduction = reduction
+
+#     def forward(self, logits, labels):
+#         # logits: [batch, seq_len, vocab_size]
+#         # labels: [batch, seq_len]
+#         vocab_size = logits.size(-1)
+
+#         # Flatten for CE
+#         logits = logits.view(-1, vocab_size)
+#         labels = labels.view(-1)
+
+#         ce_loss = F.cross_entropy(
+#             logits, labels,
+#             weight=self.weight,
+#             reduction="none"
+#         )
+
+#         pt = torch.exp(-ce_loss)  # probability of correct class
+#         focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+
+#         if self.reduction == "mean":
+#             return focal_loss.mean()
+#         elif self.reduction == "sum":
+#             return focal_loss.sum()
+#         else:
+#             return focal_loss
+
+# class FocalLossCausalLM(AutoModelForCausalLM):
+#     def __init__(self, config, gamma=2.0, weight=None, reduction="mean"):
+#         super().__init__(config)
+#         self.gamma = gamma
+#         self.weight = weight
+#         self.reduction = reduction
+
+#     def compute_focal_loss(self, logits, labels):
+#         vocab_size = logits.size(-1)
+#         logits = logits.view(-1, vocab_size)
+#         labels = labels.view(-1)
+#         ce_loss = F.cross_entropy(logits, labels, weight=self.weight, reduction="none")
+#         pt = torch.exp(-ce_loss)
+#         focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+#         if self.reduction == "mean":
+#             return focal_loss.mean()
+#         elif self.reduction == "sum":
+#             return focal_loss.sum()
+#         else:
+#             return focal_loss
+
+#     def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
+#         outputs = super().forward(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **kwargs)
+#         if labels is not None:
+#             logits = outputs.logits
+#             loss = self.compute_focal_loss(logits, labels)
+#             outputs.loss = loss
+#         return outputs
 
 class ModelTrainer:
     """Handles the complete model training pipeline"""
@@ -164,7 +325,11 @@ class ModelTrainer:
         """Initialize and configure the tokenizer"""
         logger.info(f"Loading tokenizer: {self.args.model_name}")
         tokenizer = AutoTokenizer.from_pretrained(self.args.model_name, trust_remote_code=True)
-        tokenizer.pad_token = tokenizer.eos_token
+        # Set up pad token for proper training
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokenizer.padding_side = "right"  # Fix weird overflow issue with fp16 training
         logger.debug(f"Tokenizer vocab size: {len(tokenizer)}")
         return tokenizer
 
@@ -174,7 +339,7 @@ class ModelTrainer:
         model = AutoModelForCausalLM.from_pretrained(
             self.args.model_name,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
+            # device_map="auto",
             attn_implementation="eager",
         )
         return model
@@ -183,7 +348,7 @@ class ModelTrainer:
         """Apply LoRA configuration to the model"""
         logger.info("Applying LoRA configuration...")
         peft_config = LoraConfig(
-            r=16,
+            r=8,
             lora_alpha=32,
             lora_dropout=0.05,
             target_modules=list(self.TARGET_MODULES_MAP.keys()),
@@ -218,17 +383,31 @@ class ModelTrainer:
         logger.info("Formatting training dataset...")
         train_dataset = train_dataset.map(
             lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, self.args.max_length),
-            batched=True
+            batched=True,
         )
         
         logger.info("Formatting evaluation dataset...")
         eval_dataset = eval_dataset.map(
             lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, self.args.max_length),
-            batched=True
+            batched=True,
         )
         # Initialize model
         self.model = self._initialize_model()
         self.model = self._apply_lora(self.model)
+
+
+        # # Compute weights from training annotations for Focual loss
+        # class_weights = compute_class_weight(
+        #     class_weight="balanced",
+        #     classes=np.array(LABEL_LIST),
+        #     y=list(train_dataset["annotation"])
+        # )
+        # weight_tensor = torch.tensor(class_weights, dtype=torch.float)
+        # logger.info(f"Classes: {LABEL_LIST}")
+        # logger.info(f"Weight Tensor: {weight_tensor}")
+
+        # # Pass into FocalLoss
+        # focal_loss = FocalLoss(gamma=2.0, weight=weight_tensor.to("cuda"))
 
         # Configure training
         training_args = TrainingArguments(
@@ -238,20 +417,22 @@ class ModelTrainer:
             per_device_eval_batch_size=self.args.batch_size,
             gradient_accumulation_steps=self.args.gradient_accumulation_steps,
             learning_rate=self.args.learning_rate,
-            warmup_steps=self.args.warmup_steps,
+            warmup_ratio=0.03,   # 3% of total training steps
             weight_decay=self.args.weight_decay,
-            logging_steps=10,
-            save_steps=100,
+            logging_steps=100,
+            save_steps=500,
             eval_strategy="steps",
-            eval_steps=100,
+            eval_steps=500,
             save_total_limit=1,
             load_best_model_at_end=True,
-            bf16=True,
+            bf16=True,           # enable BF16 mixed precision
+            fp16=False,          # ensure FP16 is off
             report_to="none",
             dataloader_num_workers=4,
             dataloader_pin_memory=True,
             resume_from_checkpoint=False,
             overwrite_output_dir=True,
+            max_grad_norm=1.0,  # clip gradients
         )
         
 
@@ -262,6 +443,7 @@ class ModelTrainer:
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             args=training_args,
+            # loss_func=loss_func #focual loss
         )
 
         # Start training
