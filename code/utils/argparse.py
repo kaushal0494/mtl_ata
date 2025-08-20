@@ -2,16 +2,16 @@
 """
 Argument parser for LoRA Fine-Tuning on Pedagogical Response Classification.
 
-Provides all configurable hyperparameters and training options.
+Provides all configurable hyperparameters and training/evaluation options.
 """
 
 import argparse
 
 def parse_args():
-    """Parse command-line arguments for training and model configuration."""
+    """Parse command-line arguments for training, evaluation, and model configuration."""
 
     parser = argparse.ArgumentParser(
-        description="LoRA Fine-Tuning for Pedagogical Response Classification"
+        description="LoRA Fine-Tuning / Evaluation for Pedagogical Response Classification"
     )
 
     # ----------------------
@@ -26,8 +26,12 @@ def parse_args():
         help="Base model to fine-tune (HuggingFace model name)"
     )
     parser.add_argument(
-        "--data_dir", type=str, required=True,
-        help="Directory containing train/dev/test CSV files"
+        "--data_dir", type=str, default=None,
+        help="Directory containing train/dev/test CSV files (for training)"
+    )
+    parser.add_argument(
+        "--eval_csv", type=str, default=None,
+        help="CSV file for evaluation/prediction"
     )
     parser.add_argument(
         "--dimensions", nargs="+", default=None,
@@ -35,7 +39,7 @@ def parse_args():
     )
     parser.add_argument(
         "--output_dir", type=str, default="./outputs",
-        help="Directory to save trained model and checkpoints"
+        help="Directory to save trained model, outputs, and checkpoints"
     )
     parser.add_argument(
         "--max_length", type=int, default=512,
@@ -81,6 +85,22 @@ def parse_args():
         "--lora_dropout", type=float, default=0.05,
         help="LoRA dropout probability"
     )
+    parser.add_argument(
+        "--enable_lora", type=str, default="True",
+        help="Enable LoRA adapters (True/False)"
+    )
+    parser.add_argument(
+        "--adapter_path", type=str, default=None,
+        help="Path to pre-trained LoRA adapter for evaluation"
+    )
+
+    # ----------------------
+    # Prompting related
+    # ----------------------
+    parser.add_argument(
+        "--include_label_definitions", action="store_true",
+        help="Include label definitions in the prompt (True/False)"
+    )
 
     # ----------------------
     # Logging and checkpointing
@@ -96,6 +116,47 @@ def parse_args():
     parser.add_argument(
         "--eval_steps", type=int, default=500,
         help="Steps interval between evaluation"
+    )
+    parser.add_argument(
+        "--oversample_method", type=str, default=None,
+        help="Oversampling method to use (e.g., 'random', 'smote', 'adasyn')"
+    )
+
+    # ----------------------
+    # Evaluation / Generation options
+    # ----------------------
+    parser.add_argument(
+        "--num_examples", type=int, default=100,
+        help="Number of examples to evaluate"
+    )
+    parser.add_argument(
+        "--max_new_tokens", type=int, default=10,
+        help="Maximum number of new tokens to generate during evaluation"
+    )
+    parser.add_argument(
+        "--do_sample",
+        action="store_true",
+        help="Whether to use sampling for text generation"
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=1.0,
+        help="Sampling temperature if do_sample=True"
+    )
+    parser.add_argument(
+        "--top_k", type=int, default=50,
+        help="Top-k sampling parameter"
+    )
+    parser.add_argument(
+        "--top_p", type=float, default=1.0,
+        help="Top-p (nucleus) sampling parameter"
+    )
+    parser.add_argument(
+        "--pad_token_id", type=int, default=None,
+        help="Pad token ID (default: tokenizer.eos_token_id)"
+    )
+    parser.add_argument(
+        "--eos_token_id", type=int, default=None,
+        help="End-of-sequence token ID (default: tokenizer.eos_token_id)"
     )
 
     return parser.parse_args()

@@ -128,21 +128,26 @@ class ModelTrainer:
         self._setup_logging()
 
         # Load and prepare data
-        train_dataset, eval_dataset = load_datasets(self.args.data_dir, self.args.dimensions)
+        train_dataset, eval_dataset = load_datasets(self.args.data_dir, self.args.dimensions, oversample_method=self.args.oversample_method)
         self.tokenizer = self._initialize_tokenizer()
 
         # Format datasets
         logger.info("Formatting training dataset...")
         train_dataset = train_dataset.map(
-            lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, self.args.max_length),
+            lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, self.args.max_length, max_length=self.args.max_length, include_label_definitions=self.args.include_label_definitions),
             batched=True,
         )
         
         logger.info("Formatting evaluation dataset...")
         eval_dataset = eval_dataset.map(
-            lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, self.args.max_length),
+            lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, self.args.max_length, max_length=self.args.max_length, include_label_definitions=self.args.include_label_definitions),
             batched=True,
         )
+
+        logger.info(f"Loaded {len(train_dataset)} training samples")
+        logger.info(f"Loaded {len(eval_dataset)} evaluation samples")
+        logger.info(f"Debugging sample: {train_dataset[0]}")
+
         # Initialize model
         self.model = self._initialize_model()
         self.model = self._apply_lora(

@@ -8,7 +8,6 @@ from datasets import Dataset
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
-    pipeline,
     set_seed
 )
 from peft import PeftModel
@@ -17,7 +16,13 @@ from colorama import Fore, init as colorama_init
 from tqdm import tqdm
 import json
 
+from utils.prompt import EvaluationDatasetFormatter
+from utils.constants import TARGET_MODULES_MAP, SEED, LABEL_LIST
+from utils.argparse import parse_args
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+set_seed(SEED)
 
 # Initialize colorama
 colorama_init(autoreset=True)
@@ -30,107 +35,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Constants
-LABEL_LIST = ["Yes", "To some extent", "No"]
-MAX_RETRIES = 3
-
-logger = logging.getLogger(__name__)
-
-class EvaluationDatasetFormatter:
-    """Handles formatting datasets for model training, ready for LLaMA / LoRA fine-tuning"""
-
-    SYSTEM_PROMPT = (
-        "You are an expert evaluator of AI tutors. "
-        "For the given ### Task, ### Task Definition, ### Label Definition, ### Conversation History and ### Tutor Response, assess the pedagogical appropriateness of the Tutor Response. "
-        "Output exactly one label without additional text: Yes, No, or To some extent"
-    )
-
-    # Task definitions
-    TASK_DEFINITIONS = {
-        "mistake_identification": "Has the tutor identified/recognized a mistake in a student’s response?",
-        "mistake_location": "Does the tutor’s response accurately point to a genuine mistake and its location?",
-        "providing_guidance": "Does the tutor offer correct and relevant guidance, such as an explanation, elaboration, hint, examples, and so on?",
-        "actionability": "Is it clear from the tutor’s feedback what the student should do next?"
-    }
-
-    # Optional label definitions per task
-    LABEL_DEFINITIONS = {
-        "mistake_identification": {
-            "Yes": "The tutor correctly identified the mistake in the student’s response.",
-            "To some extent": "The tutor partially recognized the mistake but did not fully capture it.",
-            "No": "The tutor failed to identify any mistake."
-        },
-        "mistake_location": {
-            "Yes": "The tutor accurately points to the exact mistake and its location.",
-            "To some extent": "The tutor points to a mistake but imprecisely or partially.",
-            "No": "The tutor fails to indicate the mistake or its location."
-        },
-        "providing_guidance": {
-            "Yes": "The tutor provides correct and relevant guidance, hints, examples, or explanation.",
-            "To some extent": "The guidance is partially correct or not fully helpful.",
-            "No": "The tutor fails to provide relevant guidance."
-        },
-        "actionability": {
-            "Yes": "It is clear what the student should do next.",
-            "To some extent": "The next steps are somewhat unclear or incomplete.",
-            "No": "The feedback does not indicate any actionable steps."
-        }
-    }
-
-    @classmethod
-    def create_dataset(cls, batch: dict, tokenizer: AutoTokenizer, max_length: int = 2048, include_label_definitions: bool = False) -> dict:
-        logger.debug(f"Formatting {len(batch['conversation'])} samples.")
-        samples = []
-        gold_labels = []
-        conversation_id = []
-        conversation_history = []
-        current_response = []
-        task_type = []
-
-        for cid, conv, resp, label, task in zip(
-            batch["id"],
-            batch["conversation"],
-            batch["response"],
-            batch["annotation"],
-            batch["task"]
-        ):
-            task_def = cls.TASK_DEFINITIONS.get(task.lower(), "No definition available for this task.")
-
-            # Prepare label definitions string if needed
-            label_def_str = ""
-            # if include_label_definitions:
-            label_defs = cls.LABEL_DEFINITIONS.get(task.lower(), {})
-            if label_defs:
-                label_lines = [f"- {k}: {v}" for k, v in label_defs.items()]
-                label_def_str = "\n".join(label_lines) + "\n\n"
-
-            messages = [
-                {
-                    "role": "user",
-                    "content": (
-                        f"{cls.SYSTEM_PROMPT}\n\n"
-                        f"### Task: {task}\n"
-                        f"### Task Definition: {task_def}\n\n"
-                        # f"### Label Definition: \n{label_def_str}"
-                        f"### Conversation History:\n{conv.strip()}\n\n"
-                        f"### Tutor Response:{resp.strip()}\n\n"
-                        f"Now provide the classification label."
-                    ),
-                },
-                # {"role": "assistant", "content": label},
-            ]
-
-            text = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-            samples.append(text)
-            gold_labels.append(label)
-            conversation_id.append(cid)
-            conversation_history.append(conv)
-            current_response.append(resp)
-            task_type.append(task)
-
-        return Dataset.from_dict({"text": samples, "gold_labels": gold_labels, "conversation_id": conversation_id, "conversation_history": conversation_history, "current_response": current_response, "task_type": task_type})
 
 def load_model_and_tokenizer(base_model_name, adapter_path=None, enable_lora=False):
     """Load base model and optionally merge LoRA adapters"""
@@ -161,7 +65,6 @@ def load_model_and_tokenizer(base_model_name, adapter_path=None, enable_lora=Fal
 
 def evaluate(args):
     logger.info(Fore.CYAN + "\n========== 🚀 Starting Evaluation ==========\n")
-    set_seed(42)
 
     model, tokenizer = load_model_and_tokenizer(args.model_name, args.adapter_path, args.enable_lora == "True")
 
@@ -171,7 +74,10 @@ def evaluate(args):
     else:
         eval_df = pd.read_csv(args.eval_csv, nrows=args.num_examples)
 
-    eval_dataset = EvaluationDatasetFormatter.create_dataset(eval_df, tokenizer)
+    eval_dataset = EvaluationDatasetFormatter.create_dataset(eval_df, tokenizer, max_length=args.max_length, include_label_definitions=args.include_label_definitions)
+
+    logger.info(f"Loaded {len(eval_dataset)} evaluation samples")
+    logger.info(f"Debugging sample: {eval_dataset[0]}")
 
     results = []
     logger.info("Running inference...")
@@ -183,11 +89,11 @@ def evaluate(args):
 
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=10,
-                do_sample=False,
-                # temperature=0.0,
-                top_k=50,
-                top_p=1.0,
+                max_new_tokens=args.max_new_tokens,
+                do_sample=args.do_sample,
+                temperature=args.temperature if args.do_sample else None,
+                top_k=args.top_k,
+                top_p=args.top_p,
                 pad_token_id=tokenizer.eos_token_id,
                 eos_token_id=tokenizer.eos_token_id
             )
@@ -271,12 +177,5 @@ def evaluate(args):
 
  
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LoRA Model Evaluation")
-    parser.add_argument("--model_name", type=str, required=True)
-    parser.add_argument("--adapter_path", type=str, default=None)
-    parser.add_argument("--eval_csv", type=str, required=True)
-    parser.add_argument("--output_dir", type=str, default="outputs")
-    parser.add_argument("--num_examples", type=int, default=100)
-    parser.add_argument("--enable_lora", type=str, default="True")
-    args = parser.parse_args()
+    args = parse_args()
     evaluate(args)

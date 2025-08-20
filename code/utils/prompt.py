@@ -1,11 +1,15 @@
 import logging
 from transformers import AutoTokenizer
 from colorama import Fore
+from datasets import Dataset
 
 logger = logging.getLogger(__name__)
 
-class DatasetFormatter:
-    """Handles formatting datasets for model training, ready for LLaMA / LoRA fine-tuning"""
+# -------------------------
+# Shared helper / base class
+# -------------------------
+class BaseFormatter:
+    """Base formatter with shared task/label definitions and prompt formatting."""
 
     SYSTEM_PROMPT = (
         "You are an expert evaluator of AI tutors. "
@@ -44,40 +48,58 @@ class DatasetFormatter:
     }
 
     @classmethod
-    def create_dataset(cls, batch: dict, tokenizer: AutoTokenizer, max_length: int = 512, include_label_definitions: bool = False) -> dict:
-        logger.debug(f"Formatting {len(batch['conversation'])} samples.")
-        texts = []
-        
-        for conv, resp, label, task in zip(
-            batch["conversation"],
-            batch["response"],
-            batch["annotation"],
-            batch["task"]
-        ):
-            task_def = cls.TASK_DEFINITIONS.get(task.lower(), "No definition available for this task.")
+    def format_messages(cls, task: str, conversation: str, response: str, label: str, label_definitions: bool = True, flag: str = "train") -> str:
+        """Return formatted text for a single sample."""
+        task_def = cls.TASK_DEFINITIONS.get(task.lower(), "No definition available for this task.")
 
-            label_def_str = ""
+        if label_definitions is True:
             label_defs = cls.LABEL_DEFINITIONS.get(task.lower(), {})
-            if label_defs:
-                label_lines = [f"- {k}: {v}" for k, v in label_defs.items()]
-                label_def_str = "\n".join(label_lines) + "\n\n"
+            label_lines = [f"- {k}: {v}" for k, v in label_defs.items()]
+            label_def_str = "\n".join(label_lines) + "\n\n"
 
+            content = (
+                f"{cls.SYSTEM_PROMPT}\n\n"
+                f"### Task: {task}\n"
+                f"### Task Definition: {task_def}\n\n"
+                f"### Label Definition: \n{label_def_str}\n\n"
+                f"### Conversation History:{conversation.strip()}\n\n"
+                f"### Tutor Response:{response.strip()}\n\n"
+                f"Now provide the classification label."
+            )
+        else:
+            content = (
+                    f"{cls.SYSTEM_PROMPT}\n\n"
+                    f"### Task: {task}\n"
+                    f"### Task Definition: {task_def}\n\n"
+                    f"### Conversation History:{conversation.strip()}\n\n"
+                    f"### Tutor Response:{response.strip()}\n\n"
+                    f"Now provide the classification label."
+            )
+        
+        if flag == 'train':
             messages = [
-                {
-                    "role": "user",
-                    "content": (
-                        f"{cls.SYSTEM_PROMPT}\n\n"
-                        f"### Task: {task}\n"
-                        f"### Task Definition: {task_def}\n\n"
-                        f"### Label Definition: \n{label_def_str}"
-                        f"### Conversation History:\n{conv.strip()}\n\n"
-                        f"### Tutor Response:{resp.strip()}\n\n"
-                        f"Now provide the classification label."
-                    ),
-                },
-                {"role": "assistant", "content": label},
+                {"role": "user", "content": content},
+                {"role": "assistant", "content": label}
             ]
+        else:
+            messages = [
+                {"role": "user", "content": content}
+            ]
+        return messages
 
+# -------------------------
+# DatasetFormatter for training
+# -------------------------
+class DatasetFormatter(BaseFormatter):
+    """Prepares tokenized datasets for model training."""
+
+    @classmethod
+    def create_dataset(cls, batch: dict, tokenizer: AutoTokenizer, max_length: int = 512, include_label_definitions: bool = False) -> dict:
+        logger.debug(f"Formatting {len(batch['conversation'])} training samples.")
+        texts = []
+
+        for conv, resp, label, task in zip(batch["conversation"], batch["response"], batch["annotation"], batch["task"]):
+            messages = cls.format_messages(task, conv, resp, label, label_definitions=include_label_definitions, flag='train')
             text = tokenizer.apply_chat_template(messages, tokenize=False)
             texts.append(text)
 
@@ -90,3 +112,36 @@ class DatasetFormatter:
         )
         tokenized["labels"] = tokenized["input_ids"]
         return tokenized
+
+
+# -------------------------
+# EvaluationDatasetFormatter for evaluation
+# -------------------------
+class EvaluationDatasetFormatter(BaseFormatter):
+    """Prepares raw text + metadata datasets for evaluation/prediction."""
+
+    @classmethod
+    def create_dataset(cls, batch: dict, tokenizer: AutoTokenizer, max_length: int = 2048, include_label_definitions: bool = False) -> Dataset:
+        logger.debug(f"Formatting {len(batch['conversation'])} evaluation samples.")
+        samples, gold_labels, conversation_id, conversation_history, current_response, task_type = [], [], [], [], [], []
+
+        for cid, conv, resp, label, task in zip(
+            batch["id"], batch["conversation"], batch["response"], batch["annotation"], batch["task"]
+        ):
+            messages = cls.format_messages(task, conv, resp, label, label_definitions=include_label_definitions, flag='eval')
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            samples.append(text)
+            gold_labels.append(label)
+            conversation_id.append(cid)
+            conversation_history.append(conv)
+            current_response.append(resp)
+            task_type.append(task)
+
+        return Dataset.from_dict({
+            "text": samples,
+            "gold_labels": gold_labels,
+            "conversation_id": conversation_id,
+            "conversation_history": conversation_history,
+            "current_response": current_response,
+            "task_type": task_type
+        })

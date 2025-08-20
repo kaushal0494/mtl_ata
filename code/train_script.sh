@@ -3,11 +3,11 @@
 # LoRA Fine-Tuning Runner
 # ============================================================
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 
 MODEL_NAME="google/gemma-2-2b-it"
 DATA_DIR="/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/inputs"
-OUTPUT_DIR="/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/outputs"
+OUTPUT_DIR="/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/outputs/exp_07"
 MAX_LENGTH=2048
 BATCH_SIZE=4
 GRAD_ACCUM=1
@@ -22,6 +22,9 @@ EVAL_STEPS=500
 LORA_R=8
 LORA_ALPHA=32
 LORA_DROPOUT=0.05
+
+# Data Augmentation
+OVERSAMPLE_METHOD="random" # Options: random, smote, adasyn
 
 # List of dimensions to train on (space-separated)
 DIMENSIONS=("Mistake_Identification" "Mistake_Location" "Providing_Guidance" "Actionability")
@@ -50,5 +53,7 @@ python train.py \
     --logging_steps $LOGGING_STEPS \
     --save_steps $SAVE_STEPS \
     --eval_steps $EVAL_STEPS \
+    --oversample_method $OVERSAMPLE_METHOD \
+    # --include_label_definitions \
     2>&1 | tee "$OUTPUT_DIR/$LOG_FILE"
 

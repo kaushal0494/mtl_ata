@@ -4,6 +4,8 @@ import pandas as pd
 from datasets import Dataset
 from utils.constants import SEED
 
+from imblearn.over_sampling import RandomOverSampler, SMOTE, ADASYN
+
 # Set up logging
 logger = logging.getLogger(__name__)
 if not logger.hasHandlers():
@@ -12,8 +14,37 @@ if not logger.hasHandlers():
         level=logging.INFO
     )
 
+def oversample_dataset(df, method):
+    """
+    Apply oversampling (Random, SMOTE, ADASYN) to balance dataset.
 
-def load_datasets(data_dir, dimensions, shuffle=True):
+    Args:
+        df (pd.DataFrame): Input dataframe with 'label' column.
+        method (str or None): One of ["random", "smote", "adasyn", None].
+
+    Returns:
+        pd.DataFrame: Oversampled dataframe.
+    """
+    if method is None:
+        return df  # no oversampling
+
+    X = df.drop(columns=["label"])
+    y = df["label"]
+
+    if method == "random":
+        sampler = RandomOverSampler(random_state=SEED)
+    elif method == "smote":
+        sampler = SMOTE(random_state=SEED)
+    elif method == "adasyn":
+        sampler = ADASYN(random_state=SEED)
+    else:
+        raise ValueError(f"Unknown oversampling method: {method}")
+
+    X_res, y_res = sampler.fit_resample(X, y)
+    df_resampled = pd.concat([X_res, y_res], axis=1)
+    return df_resampled
+
+def load_datasets(data_dir, dimensions, shuffle=True, oversample_method=None):
     """
     Load, concatenate, and optionally shuffle training and evaluation datasets
     for the specified dimensions.
@@ -28,6 +59,10 @@ def load_datasets(data_dir, dimensions, shuffle=True):
     """
 
     logger.info("Selected Dimensions: %s", dimensions)
+    if oversample_method:
+        logger.info("⚖️ Oversampling method: %s", oversample_method.upper())
+    else:
+        logger.info("⚖️ Oversampling method: None (original data)")
 
     train_dfs = []
     eval_dfs = []
@@ -54,6 +89,16 @@ def load_datasets(data_dir, dimensions, shuffle=True):
         eval_df["dimension"] = dim
 
         logger.info(f"   ✓ Training samples: {len(train_df)} | Evaluation samples: {len(eval_df)}")
+        logger.info(f"   🏷️ Training label distribution: {train_df['annotation'].value_counts().to_dict()} | Evaluation label distribution: {eval_df['annotation'].value_counts().to_dict()}")
+
+        # Apply oversampling if requested
+        if oversample_method:
+            try:
+                train_df = oversample_dataset(train_df, method=oversample_method)
+                logger.info(f"   ✓ After {oversample_method.upper()} oversampling: {len(train_df)}")
+                logger.info(f"   🏷️ Training label distribution after {oversample_method.upper()}: {train_df['annotation'].value_counts().to_dict()}")
+            except ValueError as e:
+                logger.warning(f"Skipping oversampling for {dim}: {e}")
 
         train_dfs.append(train_df)
         eval_dfs.append(eval_df)
