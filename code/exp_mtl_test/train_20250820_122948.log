@@ -1,0 +1,22 @@
+2025-08-20 12:29:50,491 - INFO - [36m
+========== 🚀 Starting LoRA Fine-Tuning ==========
+
+2025-08-20 12:29:50,491 - INFO - Model: google/gemma-2-2b-it
+2025-08-20 12:29:50,491 - INFO - Input data directory: /home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/outputs
+2025-08-20 12:29:50,491 - INFO - Selected evaluation dimensions: ['Mistake_Identification', 'Mistake_Location', 'Providing_Guidance', 'Actionability']
+2025-08-20 12:29:50,491 - INFO - Output directory: ./exp_mtl_test
+2025-08-20 12:29:50,491 - INFO - Batch size: 4
+2025-08-20 12:29:50,491 - INFO - Epochs: 3
+2025-08-20 12:29:50,491 - INFO - Learning rate: 0.0005
+2025-08-20 12:29:50,491 - INFO - Selected Dimensions: ['Mistake_Identification', 'Mistake_Location', 'Providing_Guidance', 'Actionability']
+2025-08-20 12:29:50,491 - INFO - Loading and preparing datasets...
+Traceback (most recent call last):
+  File "/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/code/train.py", line 262, in <module>
+    main()
+  File "/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/code/train.py", line 256, in main
+    trainer.train()
+  File "/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/code/train.py", line 133, in train
+    train_dataset, eval_dataset = load_datasets(self.args.data_dir, self.args.dimensions)
+  File "/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/code/utils/data_loader.py", line 41, in load_datasets
+    raise FileNotFoundError(f"Training file not found: {train_path}")
+FileNotFoundError: Training file not found: /home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/outputs/Mistake_Identification_train.csv
