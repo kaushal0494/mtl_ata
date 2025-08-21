@@ -134,13 +134,13 @@ class ModelTrainer:
         # Format datasets
         logger.info("Formatting training dataset...")
         train_dataset = train_dataset.map(
-            lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, self.args.max_length, max_length=self.args.max_length, include_label_definitions=self.args.include_label_definitions),
+            lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, max_length=self.args.max_length, include_label_definitions=self.args.include_label_definitions),
             batched=True,
         )
         
         logger.info("Formatting evaluation dataset...")
         eval_dataset = eval_dataset.map(
-            lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, self.args.max_length, max_length=self.args.max_length, include_label_definitions=self.args.include_label_definitions),
+            lambda x: DatasetFormatter.create_dataset(x, self.tokenizer, max_length=self.args.max_length, include_label_definitions=self.args.include_label_definitions),
             batched=True,
         )
 

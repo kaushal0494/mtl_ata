@@ -4,7 +4,7 @@
 # ============================================================
 export CUDA_VISIBLE_DEVICES=1
 
-FOLDER_NAME="exp_06"
+FOLDER_NAME="exp_07"
 NUM_EXAMPLES=-1
 ENABLE_LORA="True"
 MAX_LENGTH=2048
