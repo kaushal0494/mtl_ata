@@ -2,9 +2,9 @@
 # ============================================================
 # LoRA Evaluation & Prediction Runner
 # ============================================================
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 
-FOLDER_NAME="exp_07"
+FOLDER_NAME="exp_10"
 NUM_EXAMPLES=-1
 ENABLE_LORA="True"
 MAX_LENGTH=2048

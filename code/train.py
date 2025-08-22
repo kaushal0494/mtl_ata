@@ -5,16 +5,19 @@ import torch
 import pandas as pd
 import numpy as np
 from datasets import Dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, set_seed, TrainingArguments
+from transformers import AutoTokenizer, AutoModelForCausalLM, set_seed, TrainingArguments, default_data_collator
 from peft import LoraConfig, get_peft_model
 from trl import SFTTrainer
 from colorama import Fore, init as colorama_init
 from sklearn.utils.class_weight import compute_class_weight
+from torch.utils.data import DataLoader
 
 from utils.data_loader import load_datasets
 from utils.prompt import DatasetFormatter
 from utils.constants import TARGET_MODULES_MAP, SEED
 from utils.argparse import parse_args
+from utils.sampler import MultiTaskBatchSampler
+from utils.sampler import inspect_batches
 
 set_seed(SEED)
 
@@ -33,28 +36,38 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-class DataLoader:
-    """Handles loading and validation of training data"""
-    
-    @staticmethod
-    def load_dataframe(path: str, name: str) -> pd.DataFrame:
-        """Load and validate a CSV file containing training data"""
-        logger.debug(f"Attempting to load {name} CSV from: {path}")
-        if not os.path.exists(path):
-            logger.error(Fore.RED + f"{name} CSV file not found: {path}")
-            raise FileNotFoundError(f"{name} CSV file not found: {path}")
-            
-        df = pd.read_csv(path)
-        logger.debug(f"First 2 rows of {name}:\n{df.head(2)}")
-        
-        # Validate required columns
-        required_columns = ["conversation", "response", "annotation"]
-        for col in required_columns:
-            if col not in df.columns:
-                raise ValueError(f"'{col}' column missing in {name} CSV")
-                
-        logger.info(Fore.GREEN + f"{name} CSV loaded successfully with {len(df)} rows.")
-        return df
+class MultiTaskTrainer(SFTTrainer):
+    def __init__(self, *args, tasks=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if tasks is None:
+            raise ValueError("tasks must be provided to MultiTaskTrainer")
+        self.tasks = tasks
+
+    def get_train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_sampler=MultiTaskBatchSampler(
+                self.train_dataset, 
+                self.tasks,
+                task_col="task"
+            ),
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+        )
+
+    def get_eval_dataloader(self, eval_dataset=None):
+        return DataLoader(
+            eval_dataset or self.eval_dataset,
+            batch_sampler=MultiTaskBatchSampler(
+                eval_dataset or self.eval_dataset,
+                self.tasks,
+                task_col="task"
+            ),
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+        )
 
 class ModelTrainer:
     """Handles the complete model training pipeline"""
@@ -183,16 +196,28 @@ class ModelTrainer:
             max_grad_norm=1.0,  # clip gradients
         )
         
-
         # Initialize trainer
-        logger.info("Initializing SFTTrainer...")
-        self.trainer = SFTTrainer(
+        # logger.info("Initializing SFTTrainer...")
+        # self.trainer = SFTTrainer(
+        #     model=self.model,
+        #     train_dataset=train_loader,
+        #     eval_dataset=eval_loader,
+        #     args=training_args,
+        #     # loss_func=loss_func #focual loss
+        # )
+
+        logger.info("Initializing MultiTaskTrainer...")
+        self.trainer = MultiTaskTrainer(
             model=self.model,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             args=training_args,
-            # loss_func=loss_func #focual loss
+            tasks=self.args.dimensions,
         )
+
+        # train_loader = self.trainer.get_train_dataloader()
+        # inspect_batches(train_loader, self.tokenizer, num_batches=5, decode=True)
+        # exit(0)
 
         # Start training
         logger.info(Fore.YELLOW + "Starting training...")

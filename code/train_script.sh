@@ -3,15 +3,15 @@
 # LoRA Fine-Tuning Runner
 # ============================================================
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 
 MODEL_NAME="google/gemma-2-2b-it"
 DATA_DIR="/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/inputs"
-OUTPUT_DIR="/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/outputs/exp_09"
+OUTPUT_DIR="/home/kaushal.maurya/tutor_eval_auto_metrics/lora_mtl/outputs/exp_11"
 MAX_LENGTH=2048
 BATCH_SIZE=4
 GRAD_ACCUM=1
-EPOCHS=10
+EPOCHS=3
 LEARNING_RATE=5e-4
 WEIGHT_DECAY=0.01
 LOGGING_STEPS=100
@@ -19,7 +19,7 @@ SAVE_STEPS=500
 EVAL_STEPS=500
 
 # LoRA hyperparameters
-LORA_R=8
+LORA_R=16
 LORA_ALPHA=32
 LORA_DROPOUT=0.05
 
